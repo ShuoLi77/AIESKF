@@ -297,16 +297,15 @@ def dead_reckoning_ecef(
         mag_alpha = torch.norm(alpha_ib_b)
         # print(mag_alpha)
 
-        # quit()
-        ''' in-place opreation'''
-        Alpha_ib_b = torch.tensor(
-            [
-                [0, -alpha_ib_b[2], alpha_ib_b[1]],
-                [alpha_ib_b[2], 0, -alpha_ib_b[0]],
-                [-alpha_ib_b[1], alpha_ib_b[0], 0],
-            ],
-            device=dev,
-        )
+        Alpha_ib_b = torch.zeros(3,3)
+        
+        Alpha_ib_b[0,1] = -alpha_ib_b[2]
+        Alpha_ib_b[0,2] = alpha_ib_b[1]
+        Alpha_ib_b[1,0] = alpha_ib_b[2]
+        Alpha_ib_b[1,2] = -alpha_ib_b[0]
+        Alpha_ib_b[2,0] = -alpha_ib_b[1]
+        Alpha_ib_b[2,1] = alpha_ib_b[0]
+
         # Obtain coordinate transformation matrix from the new attitude w.r.t. an
         # inertial frame to the old using Rodrigues' formula, (5.73)
         if mag_alpha > 1.0e-8:
@@ -392,15 +391,16 @@ def dead_reckoning_ecef_test(Fs, dr_temp, est_C_b_e, imu_meas, imu_error):
     # this produces a warning, we should fix it
     # mag_alpha = torch.sqrt(alpha_ib_b.detach().T @ alpha_ib_b.detach())
     mag_alpha = torch.norm(alpha_ib_b)
-    '''gradient'''
-    Alpha_ib_b = torch.tensor(
-        [
-            [0, -alpha_ib_b[2], alpha_ib_b[1]],
-            [alpha_ib_b[2], 0, -alpha_ib_b[0]],
-            [-alpha_ib_b[1], alpha_ib_b[0], 0],
-        ],
-        device=dev,
-    )
+    
+    Alpha_ib_b = torch.zeros(3,3)
+    
+    Alpha_ib_b[0,1] = -alpha_ib_b[2]
+    Alpha_ib_b[0,2] = alpha_ib_b[1]
+    Alpha_ib_b[1,0] = alpha_ib_b[2]
+    Alpha_ib_b[1,2] = -alpha_ib_b[0]
+    Alpha_ib_b[2,0] = -alpha_ib_b[1]
+    Alpha_ib_b[2,1] = alpha_ib_b[0]
+
     # Obtain coordinate transformation matrix from the new attitude w.r.t. an
     # inertial frame to the old using Rodrigues' formula, (5.73)
     if mag_alpha > 1.0e-8:

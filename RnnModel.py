@@ -50,7 +50,7 @@ class LC_est_KG(nn.Module):
         
         self.cnn = nn.Sequential(
             nn.Conv1d(12, cnn_hidden_channels, kernel_size=5, stride=1, padding=2),
-            nn.ReLU(),
+            nn.LeakyReLU(0.01),
             nn.Conv1d(cnn_hidden_channels, cnn_out_channels, kernel_size=5, stride=1, padding=2),
             # nn.ReLU(),
             nn.Flatten()
@@ -221,7 +221,8 @@ class LC_est_KG(nn.Module):
         # f_4 = self.x_old_old
 
         f_4 = dr_temp[0:6] - meas
-        # f_5 = prev_out
+
+        f_5 = prev_out[0:6] - self.prev_out_old[0:6]
         
         # f_5 = self.x_pred_old
         f_1 = func.normalize(f_1, p=2, dim=0, eps=1e-12, out=None)
@@ -240,6 +241,7 @@ class LC_est_KG(nn.Module):
         # features_KG = torch.cat([f_1.detach(),f_2.detach(),f_3.detach(),f_5.detach()], dim=0)
 
         features_KG = torch.cat([f_1,f_2,f_3,f_4], dim=0)
+        # features_KG = torch.cat([f_1.detach(),f_2.detach(),f_3.detach(),f_4.detach()], dim=0)
 
         # KGainNet_in = KGainNet_in.detach()
         # print(KGainNet_in)
@@ -273,23 +275,37 @@ class LC_est_KG(nn.Module):
         if self.idx_feedback_type == 'pvab':
 
 
-            if sum(abs(Inno[6:])) > 0.001:
-                Inno_att_scale = Inno[6:9]*0.001
-            else:
-                Inno_att_scale = Inno[6:9]
-            # Inno_att_scale = Inno[6:9]*1e-4
-            skew_att = torch.tensor(
-                [
-                    [0, -Inno_att_scale[2], Inno_att_scale[1]],
-                    [Inno_att_scale[2], 0, -Inno_att_scale[0]],
-                    [-Inno_att_scale[1], Inno_att_scale[0], 0],
-                ]
-            )
+            # if sum(abs(Inno[6:])) > 0.001:
+            #     Inno_att_scale = Inno[6:9]*1e-3
+            # else:
+            #     Inno_att_scale = Inno[6:9]
+            Inno_att_scale = Inno[6:9]*1e-3
+            # skew_att = torch.tensor(
+            #     [
+            #         [0, -Inno_att_scale[2], Inno_att_scale[1]],
+            #         [Inno_att_scale[2], 0, -Inno_att_scale[0]],
+            #         [-Inno_att_scale[1], Inno_att_scale[0], 0],
+            #     ]
+            # )
+            skew_att = torch.zeros(3,3)
+            
+            skew_att[0,1] = -Inno_att_scale[2]
+            skew_att[0,2] = Inno_att_scale[1]
+            skew_att[1,0] = Inno_att_scale[2]
+            skew_att[1,2] = -Inno_att_scale[0]
+            skew_att[2,0] = -Inno_att_scale[1]
+            skew_att[2,1] = Inno_att_scale[0]
+
+            # skew_att_list = []
+            # skew_att_list.append
+
+
             est_C_b_e_new = (torch.eye(3) - skew_att) @ est_C_b_e_old
 
 
             dr_new_att = torch.squeeze(functions.CTM_to_euler(est_C_b_e_new.T))
             self.dr_new = torch.cat([dr_new_pv, dr_new_att, est_C_b_e_new.reshape(9)])
+
 
 
         

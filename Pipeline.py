@@ -176,14 +176,14 @@ class Pipeline_LC:
                 # loss3 = torch.mean(torch.abs(torch.atan2(torch.sin(angle_delta), torch.cos(angle_delta))))
                 # '''add the weight, after sovling the grad of att, we need to add the att loss the loss_all'''
                 # loss3 =  self.loss_fn(output_all[Fs:t*Fs+1, 6:], y[i, Fs:t*Fs+1, 21:])
-                # losses_train.append(loss1 + loss2 + loss3)
+                losses_train.append(loss1 +loss2 + loss3)
                 # losses_train.append(self.lcoe_p*loss1 + self.lcoe_v*loss2)
-                losses_train.append(loss3) 
+                # losses_train.append(loss3) 
 
             self.optimizer.zero_grad()
             loss_mean_train = torch.stack(losses_train).mean()
             loss_mean_train.backward()
-            # torch.nn.utils.clip_grad_norm_(self.net.parameters(),1)
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(),1)
             self.optimizer.step()
             if self.scheduler is not None:
                 self.scheduler.step()

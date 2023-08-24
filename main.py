@@ -57,28 +57,29 @@ dataset_type = 'simudata_MEMS_3d_10hz.mat'
 indx_MB = True
 
 # 
-operation = 'TRAIN'
+# operation = 'TRAIN'
  
-# operation = 'TEST'
-# in_model = '0817_MEMS_withgrad_shuffle_lstm111_800_pvb_lkrelu_alltorchnorm_m2m_ifimuatt01001'
-# %matplotlib widget
+operation = 'TEST'
+in_model = '0823_MEMS_withgrad_shuffle_lstm111_1000_pvab_lkrelu_alltorchnorm_m2m_noifimuatt01001_loss123'
+Longer_test_traj_indx = True
+%matplotlib widget
 
 # operation = 'TRAIN_USEOLD'
-# in_model = '0814_real_withgrad_shuffle_lstm111_200__feedavpb_lkrelu_alltorchnorm_m2m_noifimuatt'
-# out_model = '0814_real_withgrad_shuffle_lstm111_200__feedavpb_lkrelu_alltorchnorm_m2m_noifimuatt_1'
+# in_model = '0817_bias_withgrad_shuffle_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23_1'
+# out_model = '0817_bias_withgrad_shuffle_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23_2'
 
 
 nograd_sd = False # True: with torch.no_grad, nograd    False: none, withgrad
 idx_shuffle = True
 indx_add_measerr = False
-indx_train_gnssgap = False
+indx_train_gnssgap = True
 
 idx_lossweight_coeff = ['1','1','1']
 
 idx_feedback_type = 'pvab'
 # idx_feedback_type = 'pvb'
 # idx_other_settings = '_feedavpb_lkrelu_alltorchnorm_m2m_noifimuatt0101'
-idx_other_settings = '_lkrelu_alltorchnorm_m2m_ifimuatt01001_onlyloss3'
+idx_other_settings = '_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23'
 
 
 idx_train_batch_size = 20
@@ -95,7 +96,7 @@ recurrent_kind = 'lstm'  # 'rnn' 'gru' 'lstm'
 
 
 idx_num_epochs = 200
-idx_learning_rate =1e-4
+idx_learning_rate =1e-5
 idx_weight_decay = 1e-8
 scheduler = "cosine_annealing 200"
 # scheduler = "step 100 0.1"
@@ -277,20 +278,21 @@ test_IMU = IMU[train_num:].to(dev)
 test_targets = T[train_num:].to(dev)
 # test_targets = T2[trainsets_num:]
 
-# Longer test traj
-# indx_test = idx_cut_test_traj
-# # test_time_traj = test_time_traj.reshape(indx_test,-1)
-# test_features = train_features.reshape(indx_test,-1,6)
-# test_IMU = train_IMU.reshape(indx_test,-1,Fs,6)
-# test_targets = train_targets.reshape(indx_test,-1,33)
+if Longer_test_traj_indx:
+    # Longer test traj
+    # indx_test = idx_cut_test_traj
+    # # test_time_traj = test_time_traj.reshape(indx_test,-1)
+    # test_features = train_features.reshape(indx_test,-1,6)
+    # test_IMU = train_IMU.reshape(indx_test,-1,Fs,6)
+    # test_targets = train_targets.reshape(indx_test,-1,33)
 
 
-# # # Longer test traj
-# indx_test = idx_cut_test_traj
-# # test_time_traj = test_time_traj.reshape(indx_test,-1)
-# test_features = test_features.reshape(indx_test,-1,6)
-# test_IMU = test_IMU.reshape(indx_test,-1,Fs,6)
-# test_targets = test_targets.reshape(indx_test,-1,33)
+    # # Longer test traj
+    indx_test = idx_cut_test_traj
+    # test_time_traj = test_time_traj.reshape(indx_test,-1)
+    test_features = test_features.reshape(indx_test,-1,6)
+    test_IMU = test_IMU.reshape(indx_test,-1,Fs,6)
+    test_targets = test_targets.reshape(indx_test,-1,33)
 
 print("data loaded")
 
