@@ -31,9 +31,10 @@ class LC_est_KG(nn.Module):
         recurrent_kind,
         Fs,
         idx_feedback_type,
-        cnn_hidden_channels = 32,
-        cnn_out_channels = 1,
-        # cnn_out_dim = 32,
+        idx_ifimu,
+        idx_ifatt,
+        idx_imu_scale,
+        idx_att_scale,
 
     ):
         super(LC_est_KG, self).__init__()
@@ -45,16 +46,28 @@ class LC_est_KG(nn.Module):
         self.output_dim = output_dim
         self.Fs_imu = Fs
         self.idx_feedback_type = idx_feedback_type
+        self.idx_ifimu = idx_ifimu
+        self.idx_ifatt = idx_ifatt
+        self.idx_imu_scale = idx_imu_scale
+        self.idx_att_scale =idx_att_scale
+
+        self.acc_scale = float(idx_imu_scale[0])
+        self.gyro_scale = float(idx_imu_scale[1])
+        self.att_scale = float(idx_att_scale)
 
         """  CNN Layer  """
-        
+        cnn_hidden_channels = 32
+        cnn_out_channels = 1
         self.cnn = nn.Sequential(
-            nn.Conv1d(12, cnn_hidden_channels, kernel_size=5, stride=1, padding=2),
+            nn.Conv1d(self.Fs_imu-1, cnn_hidden_channels, kernel_size=5, stride=1, padding=2),
             nn.LeakyReLU(0.01),
             nn.Conv1d(cnn_hidden_channels, cnn_out_channels, kernel_size=5, stride=1, padding=2),
             # nn.ReLU(),
             nn.Flatten()
         )
+
+
+        
         # """  FC Layer1  """
         
         # self.layer1 = nn.Linear(self.input_dim, self.linearfc1_dim, bias=True)
@@ -64,7 +77,7 @@ class LC_est_KG(nn.Module):
 
         self.recurrent_kind = recurrent_kind
         self.rnn = {"gru": nn.GRU, "lstm": nn.LSTM, "rnn": nn.RNN}[recurrent_kind](
-            self.input_dim + cnn_out_channels * self.Fs_imu - 1, self.hidden_dim, self.n_layers, batch_first=True
+            self.input_dim + cnn_out_channels * 12, self.hidden_dim, self.n_layers, batch_first=True
         )
 
         """  FC Layer2  """
@@ -145,7 +158,7 @@ class LC_est_KG(nn.Module):
         dr_imu = torch.cat([dr_pos_diff,dr_vel_diff,imu_acc_diff,imu_gyro_diff],dim=1)
         # dr_diff = dr
         # print(dr_diff.shape)
-        cnn_out = self.cnn(dr_imu.T)
+        cnn_out = self.cnn(dr_imu)
 
         Rnn_in = torch.cat((features_KG.reshape(-1), cnn_out.reshape(-1))).reshape(1, 1, -1)
         rnn_out, self.state = self.rnn(Rnn_in, self.state)
@@ -178,10 +191,15 @@ class LC_est_KG(nn.Module):
         # accbias = self.biaslayer1(L3_out)[0]
         # gyrobias = self.biaslayer2(L3_out)[0]
 
-        if sum(abs(accbias)) > 0.5:
-            accbias = accbias*0.1
-        if sum(abs(gyrobias)) > 0.01:
-            gyrobias = gyrobias*0.01
+        if self.idx_ifimu:
+
+            if sum(abs(accbias)) > 0.5:
+                accbias = accbias * self.acc_scale 
+            if sum(abs(gyrobias)) > 0.01:
+                gyrobias = gyrobias * self.gyro_scale 
+        else:
+            accbias = accbias * self.acc_scale 
+            gyrobias = gyrobias * self.gyro_scale 
 
         # if sum(abs(accbias)) > 1:
         #     accbias = accbias*0.1
@@ -275,11 +293,13 @@ class LC_est_KG(nn.Module):
         if self.idx_feedback_type == 'pvab':
 
 
-            # if sum(abs(Inno[6:])) > 0.001:
-            #     Inno_att_scale = Inno[6:9]*1e-3
-            # else:
-            #     Inno_att_scale = Inno[6:9]
-            Inno_att_scale = Inno[6:9]*1e-3
+            if self.idx_ifatt:
+                if sum(abs(Inno[6:])) > 0.001:
+                    Inno_att_scale = Inno[6:9]* self.att_scale
+                else:
+                    Inno_att_scale = Inno[6:9]
+            else:
+                Inno_att_scale = Inno[6:9]* self.att_scale
             # skew_att = torch.tensor(
             #     [
             #         [0, -Inno_att_scale[2], Inno_att_scale[1]],
@@ -305,7 +325,6 @@ class LC_est_KG(nn.Module):
 
             dr_new_att = torch.squeeze(functions.CTM_to_euler(est_C_b_e_new.T))
             self.dr_new = torch.cat([dr_new_pv, dr_new_att, est_C_b_e_new.reshape(9)])
-
 
 
         

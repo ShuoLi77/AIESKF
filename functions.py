@@ -391,7 +391,7 @@ def dead_reckoning_ecef_test(Fs, dr_temp, est_C_b_e, imu_meas, imu_error):
     # this produces a warning, we should fix it
     # mag_alpha = torch.sqrt(alpha_ib_b.detach().T @ alpha_ib_b.detach())
     mag_alpha = torch.norm(alpha_ib_b)
-    
+
     Alpha_ib_b = torch.zeros(3,3)
     
     Alpha_ib_b[0,1] = -alpha_ib_b[2]
@@ -589,28 +589,13 @@ def gravity_ECEF(p_eb_e):
     # Calculate gravitational acceleration using (2.142)
     else:
         z_scale = float(5 * (p_eb_e[2] / mag_r) ** 2)
-        gamma = (
-            -mu
-            / mag_r ** 3
-            * (
-                p_eb_e
-                + (
-                    1.5
-                    * J_2
-                    * (R_0 / mag_r) ** 2
-                    * torch.tensor(
-                        [
-                            [(1 - z_scale) * p_eb_e[0]],
-                            [(1 - z_scale) * p_eb_e[1]],
-                            [(3 - z_scale) * p_eb_e[2]],
-                        ],
-                        device=dev,
-                    )
-                ).reshape(3)
-            )
-        )
+        z_scale_mat = torch.zeros(3)
+        z_scale_mat[0] = (1 - z_scale) * p_eb_e[0]
+        z_scale_mat[1] = (1 - z_scale) * p_eb_e[1]
+        z_scale_mat[2] = (3 - z_scale) * p_eb_e[2]
+        gamma = (-mu / mag_r ** 3 * ( p_eb_e + ( 1.5 * J_2 * (R_0 / mag_r) ** 2 * z_scale_mat)))
         # Add centripetal acceleration using (2.133)
-        g = torch.zeros(3, device=dev).reshape(3)
+        g = torch.zeros(3)
         g[0:2] = gamma[0:2] + omega_ie ** 2 * p_eb_e[0:2]
         g[2] = gamma[2]
     return g

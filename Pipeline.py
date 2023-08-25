@@ -176,14 +176,16 @@ class Pipeline_LC:
                 # loss3 = torch.mean(torch.abs(torch.atan2(torch.sin(angle_delta), torch.cos(angle_delta))))
                 # '''add the weight, after sovling the grad of att, we need to add the att loss the loss_all'''
                 # loss3 =  self.loss_fn(output_all[Fs:t*Fs+1, 6:], y[i, Fs:t*Fs+1, 21:])
-                losses_train.append(loss1 +loss2 + loss3)
+                losses_train.append(loss1+ loss2 + loss3)
+                # losses_train.append(loss2 + loss3)
+
                 # losses_train.append(self.lcoe_p*loss1 + self.lcoe_v*loss2)
                 # losses_train.append(loss3) 
 
             self.optimizer.zero_grad()
             loss_mean_train = torch.stack(losses_train).mean()
             loss_mean_train.backward()
-            torch.nn.utils.clip_grad_norm_(self.net.parameters(),1)
+            # torch.nn.utils.clip_grad_norm_(self.net.parameters(),1)
             self.optimizer.step()
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -283,8 +285,10 @@ class Pipeline_LC:
             
             for t in range(predict_traj.shape[1] - 1):
                 
-                if t % Fs == 0 and t != 0:
+                # if t % Fs == 0 and t != 0:
                 # if t % Fs == 0 and t != 0 and t!= 100 and t!= 110 and t!= 120 and t!= 130 and t!= 140 and t!= 150 :
+                if t % Fs == 0 and t != 0 and t!= 1000 and t!= 1010 and t!= 1020 and t!= 1030 and t!= 1040 and t!= 1050 and t!= 1060 and t!= 1070 and t!= 1080 and t!= 1090 and t!= 1100 and t!= 1110:
+
                 # if t % Fs == 0 and t != 0 and t!= 100 and t!= 110 and t!= 120 and t!= 130 and t!= 140 and t!= 150 and t!= 160 and t!= 170 and t!= 180 and t!= 190 and t!= 200 and t!= 210 :
 
                 # if t <-1:
@@ -528,8 +532,9 @@ class Pipeline_LC:
             for t in range(predict_traj.shape[1] - 1):
                 
                 # if t % Fs == 0 and t != 0 and t!= 100 and t!= 110 and t!= 120 and t!= 130 and t!= 140 and t!= 150:
+                if t % Fs == 0 and t != 0 and t!= 1000 and t!= 1010 and t!= 1020 and t!= 1030 and t!= 1040 and t!= 1050:
                 # if t <-1:
-                if t % Fs == 0 and t != 0:
+                # if t % Fs == 0 and t != 0:
                     predict_traj[i, t, :], est_C_b_e_iter, imu_error, P_est[i, int(t / Fs)] = functions.Model_LC(
                         X[0, int(t / Fs), :],
                         predict_traj[i, t],

@@ -53,39 +53,47 @@ currt_folder = os.getcwd()
 #GIVE_real_data_0316_60s
 # simudata_Errorfree_3d_10hz
 
-dataset_type = 'simudata_MEMS_3d_10hz.mat'
+dataset_type = 'GIVE_real_data_0316.mat'
 indx_MB = True
 
 # 
-# operation = 'TRAIN'
+operation = 'TRAIN'
  
-operation = 'TEST'
-in_model = '0823_MEMS_withgrad_shuffle_lstm111_1000_pvab_lkrelu_alltorchnorm_m2m_noifimuatt01001_loss123'
-Longer_test_traj_indx = True
-%matplotlib widget
+# operation = 'TEST'
+# in_model = '0825_MEMS_withgrad_shuffle_lstm111_1000_pvab_lkrelu_alltorchnorm_m2m_withifimuatt0101_loss123'
+# %matplotlib widget
 
 # operation = 'TRAIN_USEOLD'
-# in_model = '0817_bias_withgrad_shuffle_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23_1'
-# out_model = '0817_bias_withgrad_shuffle_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23_2'
+# in_model = '0824_MEMS_withgrad_shuffle_gnssgap_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_newf5_noifimuatt01001noscale_loss123'
+# out_model = '0824_MEMS_withgrad_shuffle_gnssgap_lstm111_200_pvab_lkrelu_alltorchnorm_m2m_newf5_noifimuatt01001noscale_loss123_1'
 
 
 nograd_sd = False # True: with torch.no_grad, nograd    False: none, withgrad
 idx_shuffle = True
 indx_add_measerr = False
-indx_train_gnssgap = True
+indx_train_gnssgap = False
 
 idx_lossweight_coeff = ['1','1','1']
 
+idx_ifimu = True
+idx_ifatt = False
+idx_imu_scale = ['0.1','0.01']
+idx_att_scale = '0.001'
+
 idx_feedback_type = 'pvab'
 # idx_feedback_type = 'pvb'
+
+
 # idx_other_settings = '_feedavpb_lkrelu_alltorchnorm_m2m_noifimuatt0101'
-idx_other_settings = '_lkrelu_alltorchnorm_m2m_ifimuatt01001_loss23'
+idx_other_settings = '_m2m_loss123'
 
 
 idx_train_batch_size = 20
 idx_cut_test_traj = 1
 
-input_dim = 9 + 9 + 6 + 6
+input_dim = 9 + 9 + 6 + 6 
+# input_dim = 6+ 6 + 6
+
 hidden_dim =256
 n_layers = 4
 linearfc2_dim = 512
@@ -95,10 +103,10 @@ droupout_rate = 0
 recurrent_kind = 'lstm'  # 'rnn' 'gru' 'lstm'
 
 
-idx_num_epochs = 200
-idx_learning_rate =1e-5
+idx_num_epochs = 100
+idx_learning_rate =1e-4
 idx_weight_decay = 1e-8
-scheduler = "cosine_annealing 200"
+scheduler = "cosine_annealing 500"
 # scheduler = "step 100 0.1"
 
 # scheduler = "None"
@@ -144,8 +152,28 @@ if operation == 'TRAIN':
     else:
         inx_train_gnssgap = ''
 
+    if idx_ifimu:
+        idx_ifimu_str = 'ifimu'
+    else:  
+        idx_ifimu_str = 'noifimu'
+
+    idx_imu_scale_str = idx_imu_scale[0][0] + idx_imu_scale[0][2:] + idx_imu_scale[1][0] + idx_imu_scale[1][2:] 
+ 
+
+    if idx_ifatt:
+        idx_ifatt_str = 'ifatt'
+    else:  
+        idx_ifatt_str = 'noifatt'
+
+    idx_att_scale_str = idx_att_scale[0] + idx_att_scale[2:] 
+
+    if idx_feedback_type == 'pvb_':
+        idx_ifatt_str = ''
+        idx_att_scale_str = ''
+
+
     idx_lossweight_coeff_str = ''.join(idx_lossweight_coeff)    
-    out_model = today_date + idx_dataset_type + idx_dr_grad + idx_shuffle_str + inx_train_gnssgap + idx_add_err + recurrent_kind + idx_lossweight_coeff_str + '_' + str(idx_num_epochs) + '_' + idx_feedback_type + idx_other_settings
+    out_model = today_date + idx_dataset_type + idx_dr_grad + idx_shuffle_str + inx_train_gnssgap + idx_add_err + recurrent_kind + idx_lossweight_coeff_str + '_' + str(idx_num_epochs) + '_' + idx_feedback_type + '_' +  idx_ifimu_str + idx_imu_scale_str + idx_ifatt_str + idx_att_scale_str + idx_other_settings
     out_model_path = currt_folder + '/model/' + out_model + '.pt'
 
     LoadModel = False
@@ -278,21 +306,20 @@ test_IMU = IMU[train_num:].to(dev)
 test_targets = T[train_num:].to(dev)
 # test_targets = T2[trainsets_num:]
 
-if Longer_test_traj_indx:
-    # Longer test traj
-    # indx_test = idx_cut_test_traj
-    # # test_time_traj = test_time_traj.reshape(indx_test,-1)
-    # test_features = train_features.reshape(indx_test,-1,6)
-    # test_IMU = train_IMU.reshape(indx_test,-1,Fs,6)
-    # test_targets = train_targets.reshape(indx_test,-1,33)
+# Longer test traj
+# indx_test = idx_cut_test_traj
+# # test_time_traj = test_time_traj.reshape(indx_test,-1)
+# test_features = train_features.reshape(indx_test,-1,6)
+# test_IMU = train_IMU.reshape(indx_test,-1,Fs,6)
+# test_targets = train_targets.reshape(indx_test,-1,33)
 
 
-    # # Longer test traj
-    indx_test = idx_cut_test_traj
-    # test_time_traj = test_time_traj.reshape(indx_test,-1)
-    test_features = test_features.reshape(indx_test,-1,6)
-    test_IMU = test_IMU.reshape(indx_test,-1,Fs,6)
-    test_targets = test_targets.reshape(indx_test,-1,33)
+# # Longer test traj
+# indx_test = idx_cut_test_traj
+# # test_time_traj = test_time_traj.reshape(indx_test,-1)
+# test_features = test_features.reshape(indx_test,-1,6)
+# test_IMU = test_IMU.reshape(indx_test,-1,Fs,6)
+# test_targets = test_targets.reshape(indx_test,-1,33)
 
 print("data loaded")
 
@@ -396,6 +423,10 @@ net = RnnModel.LC_est_KG(
     recurrent_kind,
     Fs,
     idx_feedback_type,
+    idx_ifimu,
+    idx_ifatt,
+    idx_imu_scale,
+    idx_att_scale,
 )
 net.to(dev)
 
@@ -568,7 +599,7 @@ plt.grid()
 plt.title("Net position Height")
 for k in range(ref_traj_llh.shape[0]):  # est_traj_nn.shape[0]):
     plt.plot(ref_traj_llh[k, :, 2], "b", label="Reference"  if k == 0 else None)
-    plt.plot(est_traj_nn_llh_MB[k, :, 2], "g", label="Net"  if k == 0 else None)
+    plt.plot(est_traj_nn_llh_MB[k, :, 2], "g", label="MB"  if k == 0 else None)
     plt.plot(est_traj_nn_llh[k, :, 2], "r", label="Net"  if k == 0 else None)
 plt.legend()
 
