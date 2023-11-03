@@ -29,6 +29,8 @@ class Pipeline_LC:
         self.lcoe_v = float(lossweight_coeff[1])
         self.lcoe_a = float(lossweight_coeff[2])
 
+        self.get_x_init_error_free_batched = torch.vmap(self.get_x_init_error_free)
+
         # self.optimizer = torch.optim.Adadelta(
         #     self.net.parameters(), lr=learning_rate, weight_decay=weight_decay
         # )
@@ -60,130 +62,91 @@ class Pipeline_LC:
         for epoch in range(self.num_epochs):
 
             self.net.epoch = epoch
-            loss_mean_val = 0
-            losses_train = []
             self.net.train()
 
             X, y, imu_meas = next(iter(train_loader))
+
+            batch_size = X.shape[0]
+
             '''Here, we could use initialization stategy to init hidden state'''
-            self.net.init_hidden_state()
+            self.net.init_hidden_state(batch_size)
 
-            for i in range(0, X.shape[0]):
-                
-                '''the gradient in est_C_b_e is tricky'''
-                
-                # pos3 vel3 att3 Cbe9
-                output_all = torch.zeros(train_dataset.time_step * Fs, 18)
-                imu_error = torch.zeros(6)
+            # pos3 vel3 att3 Cbe9
+            output_all = torch.zeros(batch_size, train_dataset.time_step * Fs, 18)
+            imu_error = torch.zeros(batch_size, 6)
 
-                # # apply a random Gaussian error to the ref as init pva
-                # est_pos_old, est_vel_old, est_C_b_e_old = self.get_x_init(
-                #     train_dataset.targets[i, 0, :]
-                # )
-                # Use Error free init pva
-                est_pos_init, est_vel_init, est_C_b_e_iter, est_att_init = self.get_x_init_error_free(y[i, 0, :])
-                
-                '''[pos, vel ,att[b_e]]'''
-                last_output_train = torch.cat([est_pos_init, est_vel_init, est_att_init, est_C_b_e_iter.reshape(9)])
-                
-                
-                # init features
-                self.net.init_sequence(Fs_meas, last_output_train, X[i, 0, :], imu_meas[i, 0, -1, :])
-                
-                # Iterate through the entire traj of one batch
-                for t in range(X.shape[1]-1):
-                # for t in range(16):
-                # for t in range(50):
+            # # apply a random Gaussian error to the ref as init pva
+            # est_pos_old, est_vel_old, est_C_b_e_old = self.get_x_init(
+            #     train_dataset.targets[i, 0, :]
+            # )
+            # Use Error free init pva
+            est_pos_init, est_vel_init, est_C_b_e_iter, est_att_init = self.get_x_init_error_free_batched(y[:, 0, :])
 
-                    if self.nograd:
-                        with torch.no_grad():
-                            dr_temp, est_C_b_e_iter = functions.dead_reckoning_ecef(
-                                Fs,
-                                last_output_train,
-                                est_C_b_e_iter,
-                                imu_meas[i, t],
-                                imu_error,
-                                on_cpu=True,
-                                )
-                    else:
-                        dr_temp, est_C_b_e_iter = functions.dead_reckoning_ecef(
+            '''[pos, vel ,att[b_e]]'''
+            last_output_train = torch.cat([est_pos_init, est_vel_init, est_att_init, est_C_b_e_iter.flatten(1)], dim=1)
+
+            self.net.init_sequence(Fs_meas, last_output_train, X[:, 0, :], imu_meas[:, 0, -1, :])
+
+            timesteps = X.shape[1] - 1 # skip first one
+            for t in range(timesteps):
+                if self.nograd:
+                    with torch.no_grad():
+                        dr_temp, est_C_b_e_iter = functions.dead_reckoning_ecef_batched(
                             Fs,
                             last_output_train,
                             est_C_b_e_iter,
-                            imu_meas[i, t],
+                            imu_meas[:, t],
                             imu_error,
-                            on_cpu=True,
-                            )
-                    if self.train_gnssgap:
-                        
-                        if t < 10 or t > 15:
-                        # if t < -1:
-                            output_train, est_C_b_e_iter, imu_error = self.net(
-                                X[i, t + 1, :],
-                                dr_temp[-1],
-                                est_C_b_e_iter,
-                                imu_meas[i, t],
-                                last_output_train,
-                                dr_temp[-Fs:],
-                            )
-                    
-                            output_all[Fs * t + 1 : Fs * t + Fs] = dr_temp[1:-1]
-                            output_all[Fs * t + Fs] = output_train
-                            last_output_train = output_train
-                        else:
-                            output_all[Fs * t + 1 : Fs * t + Fs] = dr_temp[1:-1]
-                            output_all[Fs * t + Fs] = dr_temp[-1]
-                            last_output_train = dr_temp[-1]
-                    else:
-                        output_train, est_C_b_e_iter, imu_error = self.net(
-                            X[i, t + 1, :],
-                            dr_temp[-1],
-                            est_C_b_e_iter,
-                            imu_meas[i, t],
-                            last_output_train,
-                            dr_temp[-Fs:],
                         )
-                    
-                        output_all[Fs * t + 1 : Fs * t + Fs] = dr_temp[1:-1]
-                        output_all[Fs * t + Fs] = output_train
+                else:
+                    dr_temp, est_C_b_e_iter = functions.dead_reckoning_ecef_batched(
+                        Fs,
+                        last_output_train,
+                        est_C_b_e_iter,
+                        imu_meas[:, t],
+                        imu_error,
+                    )
+
+                if self.train_gnssgap:
+
+                    if t < 10 or t > 15:
+                        # if t < -1:
+                        output_train, est_C_b_e_iter, imu_error = self.net(
+                            X[:, t + 1, :],
+                            dr_temp[:, -1],
+                            est_C_b_e_iter,
+                            imu_meas[:, t],
+                            last_output_train,
+                            dr_temp[:, -Fs:],
+                        )
+
+                        output_all[:, Fs * t + 1: Fs * t + Fs] = dr_temp[:, 1:-1]
+                        output_all[:, Fs * t + Fs] = output_train
                         last_output_train = output_train
-                # # test DR correct or not
+                    else:
+                        output_all[Fs * t + 1: Fs * t + Fs] = dr_temp[:, 1:-1]
+                        output_all[Fs * t + Fs] = dr_temp[:, -1]
+                        last_output_train = dr_temp[:, -1]
+                else:
+                    output_train, est_C_b_e_iter, imu_error = self.net(
+                        X[:, t + 1, :],
+                        dr_temp[:, -1],
+                        est_C_b_e_iter,
+                        imu_meas[:, t],
+                        last_output_train,
+                        dr_temp[:, -Fs:],
+                    )
 
-                # est_pos_new[0, :], est_vel_new[0, :], est_C_b_e_new[0] = est_pos_old, est_vel_old, est_C_b_e_old
+                    output_all[:, Fs * t + 1: Fs * t + Fs] = dr_temp[:, 1:-1]
+                    output_all[:, Fs * t + Fs] = output_train
+                    last_output_train = output_train
 
-                # check_list = 0
-
-                # for j in range(self.time_step-1):
-
-                #     est_pos_new[j+1, :], est_vel_new[j+1, :], est_C_b_e_new[j+1] = functions.dead_reckoning_ecef(
-                #         self.imu_time_interval,
-                #         est_pos_new[j, :],
-                #         est_vel_new[j, :],
-                #         est_C_b_e_new[j],
-                #         train_dataset.imu_meas[i, j, :, :],
-                #     )
-                #     _,_,est_att_new[j,:] = functions.ecef2geo_ned(est_pos_new[j, :], est_vel_new[j, :], est_C_b_e_new[j])
-
-                loss1 = self.loss_fn(output_all[Fs:t*Fs+1, 0:3], y[i, Fs:t*Fs+1, 0:3])
-                loss2 = self.loss_fn(output_all[Fs:t*Fs+1, 3:6], y[i, Fs:t*Fs+1, 3:6])
-                loss3 = self.loss_fn(1e2*output_all[Fs:t*Fs+1, 9:18], 1e2*y[i, Fs:t*Fs+1, 24:33])
-                
-                # loss1 = self.loss_fn(output_all[t*Fs+1, 0:3], y[i, t*Fs+1, 0:3])
-                # loss2 = self.loss_fn(output_all[t*Fs+1, 3:6], y[i, t*Fs+1, 3:6])
-
-                
-                # angle_delta = output_all[Fs:t*Fs+1, 6:] - y[i, Fs:t*Fs+1, 21:]
-                # loss3 = torch.mean(torch.abs(torch.atan2(torch.sin(angle_delta), torch.cos(angle_delta))))
-                # '''add the weight, after sovling the grad of att, we need to add the att loss the loss_all'''
-                # loss3 =  self.loss_fn(output_all[Fs:t*Fs+1, 6:], y[i, Fs:t*Fs+1, 21:])
-                losses_train.append(loss1+ loss2 + loss3)
-                # losses_train.append(loss2 + loss3)
-
-                # losses_train.append(self.lcoe_p*loss1 + self.lcoe_v*loss2)
-                # losses_train.append(loss3) 
+            loss1 = self.loss_fn(output_all[:, Fs:t * Fs + 1, 0:3], y[:, Fs:t * Fs + 1, 0:3])
+            loss2 = self.loss_fn(output_all[:, Fs:t * Fs + 1, 3:6], y[:, Fs:t * Fs + 1, 3:6])
+            loss3 = self.loss_fn(1e2 * output_all[:, Fs:t * Fs + 1, 9:18], 1e2 * y[:, Fs:t * Fs + 1, 24:33])
 
             self.optimizer.zero_grad()
-            loss_mean_train = torch.stack(losses_train).mean()
+            loss_mean_train = loss1 + loss2 + loss3
             loss_mean_train.backward()
             # torch.nn.utils.clip_grad_norm_(self.net.parameters(),1)
             self.optimizer.step()
@@ -256,7 +219,7 @@ class Pipeline_LC:
 
         dt = 1 / Fs
 
-        self.net.init_hidden_state()
+        self.net.init_hidden_state(1)
 
         # init features
         # self.net.init_sequence()
@@ -281,7 +244,7 @@ class Pipeline_LC:
             imu_meas = imu_meas.reshape(1, -1, 6)
 
             # init features
-            self.net.init_sequence(Fs_meas, predict_traj[i, 0], X[0, 0], imu_meas[0, 0, -1])
+            self.net.init_sequence(Fs_meas, predict_traj[i, 0].unsqueeze(0), X[0, 0].unsqueeze(0), imu_meas[0, 0, -1].unsqueeze(0))
             
             for t in range(predict_traj.shape[1] - 1):
                 
@@ -292,7 +255,7 @@ class Pipeline_LC:
                 # if t % Fs == 0 and t != 0 and t!= 100 and t!= 110 and t!= 120 and t!= 130 and t!= 140 and t!= 150 and t!= 160 and t!= 170 and t!= 180 and t!= 190 and t!= 200 and t!= 210 :
 
                 # if t <-1:
-                    predict_traj[i, t, :], est_C_b_e_iter, imu_error = self.net(
+                    predict_traj[i, t, :], est_C_b_e_iter, imu_error = self.net.forward_unbatched(
                         X[0, int(t / Fs), :],
                         predict_traj[i, t],
                         est_C_b_e_iter,

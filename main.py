@@ -88,7 +88,7 @@ idx_feedback_type = 'pvab'
 idx_other_settings = '_m2m_loss123'
 
 
-idx_train_batch_size = 20
+idx_train_batch_size = 13
 idx_cut_test_traj = 1
 
 input_dim = 9 + 9 + 6 + 6 
@@ -103,7 +103,7 @@ droupout_rate = 0
 recurrent_kind = 'lstm'  # 'rnn' 'gru' 'lstm'
 
 
-idx_num_epochs = 100
+idx_num_epochs = 1
 idx_learning_rate =1e-4
 idx_weight_decay = 1e-8
 scheduler = "cosine_annealing 500"
