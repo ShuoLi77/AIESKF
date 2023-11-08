@@ -71,16 +71,12 @@ def euler_to_CTM(eul):
     sin_psi = torch.sin(eul[2])
     cos_psi = torch.cos(eul[2])
     # Calculate coordinate transformation matrix
-    C = torch.zeros(9).reshape(3, 3)
-    C[0, 0] = cos_theta * cos_psi
-    C[0, 1] = cos_theta * sin_psi
-    C[0, 2] = -sin_theta
-    C[1, 0] = -cos_phi * sin_psi + sin_phi * sin_theta * cos_psi
-    C[1, 1] = cos_phi * cos_psi + sin_phi * sin_theta * sin_psi
-    C[1, 2] = sin_phi * cos_theta
-    C[2, 0] = sin_phi * sin_psi + cos_phi * sin_theta * cos_psi
-    C[2, 1] = -sin_phi * cos_psi + cos_phi * sin_theta * sin_psi
-    C[2, 2] = cos_phi * cos_theta
+    # todo: Maybe we should .detach() here
+    C = torch.stack((
+        cos_theta * cos_psi, cos_theta * sin_psi, -sin_theta,
+        -cos_phi * sin_psi + sin_phi * sin_theta * cos_psi, cos_phi * cos_psi + sin_phi * sin_theta * sin_psi, sin_phi * cos_theta,
+        sin_phi * sin_psi + cos_phi * sin_theta * cos_psi, -sin_phi * cos_psi + cos_phi * sin_theta * sin_psi, cos_phi * cos_theta
+    )).reshape(3, 3)
     # C = [cos(y)*cos(p),  -sin(y)*cos(r)+cos(y)*sin(p)*sin(r), sin(y)*sin(r)+cos(y)*sin(p)*cos(r);
     #      sin(y)*cos(p),   cos(y)*cos(r)+sin(y)*sin(p)*sin(r),-sin(r)*cos(y)+sin(y)*sin(p)*cos(r);
     #            -sin(p),                        sin(r)*cos(p),                      cos(p)*cos(r)];
@@ -106,20 +102,32 @@ def CTM_to_euler(C):
     #   eul     Euler angles describing rotation from beta to alpha in the
     #           order roll, pitch, yaw(rad)
     '''in place'''
-    eul = torch.zeros(3)
-    eul[0] = torch.atan2(C[1, 2], C[2, 2])
-    # roll
-    eul[1] = -torch.asin(C[0, 2])
-    # pitch
-    eul[2] = torch.atan2(C[0, 1], C[0, 0])
-    # yaw
+    # todo: maybe we need .detach() here
+    eul = torch.stack((
+        torch.atan2(C[1, 2], C[2, 2]),
+        -torch.asin(C[0, 2]),
+        torch.atan2(C[0, 1], C[0, 0])
+    ))
     # eul[0] = - math.atan2(C[2,0],C[2,2]);  # roll
     # eul[1] = math.asin(C[2,1]);        # pitch
     # eul[2] = - math.atan2(C[0,1],C[1,1]);  # yaw
-    
+
     # eul = torch.where(torch.isnan(eul), torch.full_like(eul, 0.), eul)
-    
+
     return eul
+
+CTM_to_euler_batched = torch.vmap(CTM_to_euler, in_dims=(0), out_dims=0)
+
+def zero_pad(value) -> torch.Tensor:
+    if type(value) == torch.Tensor:
+        v = value
+    else:
+        v = torch.tensor(value)
+    v = v.unsqueeze(0)
+    return torch.cat((
+        torch.zeros(2),
+        v
+    ))
 
 
 def skew_symmetric(vec):
@@ -134,21 +142,26 @@ def skew_symmetric(vec):
     #   a       3-element vector
     # Outputs:
     #   A       3x3matrix
-    Matr = torch.zeros(9).reshape(3, 3)
-    Matr[0, 0] = 0
-    Matr[0, 1] = -vec[2]
-    Matr[0, 2] = vec[1]
-    Matr[1, 0] = vec[2]
-    Matr[1, 1] = 0
-    Matr[1, 2] = -vec[0]
-    Matr[2, 0] = -vec[1]
-    Matr[2, 1] = vec[0]
-    Matr[2, 2] = 0
+    Matr = torch.stack((
+        torch.zeros(1).squeeze(), -vec[2], vec[1],
+        vec[2], torch.zeros(1).squeeze(), -vec[0],
+        -vec[1], vec[0], torch.zeros(1).squeeze()
+    )).reshape(3, 3)
     return Matr
 
 
-omega_ie_e = torch.tensor([[0], [0], [constant_omega_ie]])
+omega_ie_e = torch.tensor([0, 0, constant_omega_ie])
 OMEGA_ie_e = skew_symmetric(omega_ie_e).to(dev)
+
+
+def get_R_e_n(cos_lat, sin_lat, cos_lon, sin_lon):
+    return torch.stack(
+        (
+            -sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat,
+            -sin_lon, cos_lon, torch.zeros(1).squeeze(),
+            -cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat,
+        )
+    ).reshape(3, 3)
 
 
 def geo_ned2ecef(*arg):
@@ -176,69 +189,31 @@ def geo_ned2ecef(*arg):
     # Calculate transverse radius of curvature using (2.105)
     Lat = arg[0][0]
     Long = arg[0][1]
-    h = float(arg[0][2])
-    RN = R_0 / math.sqrt(1 - (e * math.sin(Lat)) ** 2)
+    h = arg[0][2]
+    RN = R_0 / torch.sqrt(1 - (e * torch.sin(Lat)) ** 2)
+    cos_lat = torch.cos(Lat)
+    sin_lat = torch.sin(Lat)
+    cos_lon = torch.cos(Long)
+    sin_lon = torch.sin(Long)
+    # todo: Maybe we should .detach() here
+    r_eb_e = torch.stack(
+        (
+            (RN + h) * cos_lat * cos_lon,
+            (RN + h) * cos_lat * sin_lon,
+            ((1 - e ** 2) * RN + h) * sin_lat,
+        )
+    )
     if len(arg) == 1:
-        cos_lat = math.cos(Lat)
-        sin_lat = math.sin(Lat)
-        cos_lon = math.cos(Long)
-        sin_lon = math.sin(Long)
-        r_eb_e = torch.tensor(
-            [
-                [(RN + h) * cos_lat * cos_lon],
-                [(RN + h) * cos_lat * sin_lon],
-                [((1 - e**2) * RN + h) * sin_lat],
-            ]
-        )
         return r_eb_e
+    # Calculate ECEF to NED coordinate transformation matrix
+    # todo: Maybe we should .detach() here
+    R_e_n = get_R_e_n(cos_lat, sin_lat, cos_lon, sin_lon)
+    R_n_e = R_e_n.T
+    # Transform velocity using (2.73)
+    v_eb_e = R_n_e @ arg[1]
     if len(arg) == 2:
-        cos_lat = math.cos(Lat)
-        sin_lat = math.sin(Lat)
-        cos_lon = math.cos(Long)
-        sin_lon = math.sin(Long)
-        r_eb_e = torch.tensor(
-            [
-                [(RN + h) * cos_lat * cos_lon],
-                [(RN + h) * cos_lat * sin_lon],
-                [((1 - e**2) * RN + h) * sin_lat],
-            ]
-        )
-        # Calculate ECEF to NED coordinate transformation matrix
-        R_e_n = torch.tensor(
-            [
-                [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
-                [-sin_lon, cos_lon, 0],
-                [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat],
-            ]
-        )
-        R_n_e = R_e_n.T
-        # Transform velocity using (2.73)
-        v_eb_e = R_n_e @ arg[1]
         return r_eb_e, v_eb_e
     if len(arg) == 3:
-        # Convert position using (2.112)
-        cos_lat = math.cos(Lat)
-        sin_lat = math.sin(Lat)
-        cos_lon = math.cos(Long)
-        sin_lon = math.sin(Long)
-        r_eb_e = torch.tensor(
-            [
-                [(RN + h) * cos_lat * cos_lon],
-                [(RN + h) * cos_lat * sin_lon],
-                [((1 - e**2) * RN + h) * sin_lat],
-            ]
-        )
-        # Calculate ECEF to NED coordinate transformation matrix
-        R_e_n = torch.tensor(
-            [
-                [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
-                [-sin_lon, cos_lon, 0],
-                [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat],
-            ]
-        )
-        R_n_e = R_e_n.T
-        # Transform velocity using (2.73)
-        v_eb_e = R_n_e @ arg[1]
         # Transform attitude using (2.15)
         R_b_e = R_n_e @ arg[2]
         return r_eb_e.reshape(3), v_eb_e, R_b_e
@@ -246,7 +221,7 @@ def geo_ned2ecef(*arg):
 
 
 def dead_reckoning_ecef(
-    Fs, dr_temp, est_C_b_e_new, imu_meas, imu_error, on_cpu: bool = False
+    Fs, dr_temp, est_C_b_e_new, imu_meas, imu_error
 ):
     # if on_cpu:
     #     result_dev = est_pos_new.device
@@ -256,7 +231,7 @@ def dead_reckoning_ecef(
     #     dev = result_dev
     dt = 1/Fs
     dr_result = [dr_temp]
-    
+
     # move initial data to dev
     # est_pos_new = est_pos_new.to(dev)
     # est_vel_new = est_vel_new.to(dev)
@@ -270,10 +245,10 @@ def dead_reckoning_ecef(
     # old_v_eb_e_new = None
     # old_C_b_e_new = None
     for i in range(imu_meas.shape[0]):
-        
+
 
         f_ib_b = imu_meas[i, 0:3] - imu_error[0:3]
-        omega_ib_b = imu_meas[i, 3:6] - imu_error[3:6] 
+        omega_ib_b = imu_meas[i, 3:6] - imu_error[3:6]
         # ATTITUDE UPDATE
         # From (2.145) determine the Earth rotation over the update interval
         # C_Earth = C_e_i' * old_C_e_i
@@ -289,7 +264,7 @@ def dead_reckoning_ecef(
             device=dev,
         )
         # Calculate attitude increment, magnitude, and skew-symmetric matrix
-        alpha_ib_b = omega_ib_b * dt
+        alpha_ib_b = omega_ib_b.squeeze() * dt
         # this produces a warning, we should fix it
         # mag_alpha = torch.sqrt(alpha_ib_b.detach().T @ alpha_ib_b.detach())
         # print(alpha_ib_b)
@@ -297,53 +272,73 @@ def dead_reckoning_ecef(
         mag_alpha = torch.norm(alpha_ib_b)
         # print(mag_alpha)
 
-        Alpha_ib_b = torch.zeros(3,3)
-        
-        Alpha_ib_b[0,1] = -alpha_ib_b[2]
-        Alpha_ib_b[0,2] = alpha_ib_b[1]
-        Alpha_ib_b[1,0] = alpha_ib_b[2]
-        Alpha_ib_b[1,2] = -alpha_ib_b[0]
-        Alpha_ib_b[2,0] = -alpha_ib_b[1]
-        Alpha_ib_b[2,1] = alpha_ib_b[0]
+        Alpha_ib_b = torch.stack((
+            torch.zeros(1).squeeze(), -alpha_ib_b[2], alpha_ib_b[1],
+            alpha_ib_b[2], torch.zeros(1).squeeze(), -alpha_ib_b[0],
+            -alpha_ib_b[1], alpha_ib_b[0], torch.zeros(1).squeeze()
+        )).reshape(3, 3)
 
         # Obtain coordinate transformation matrix from the new attitude w.r.t. an
         # inertial frame to the old using Rodrigues' formula, (5.73)
-        if mag_alpha > 1.0e-8:
-            C_new_old = (
-                torch.eye(3, device=dev)
-                + torch.sin(mag_alpha) / mag_alpha * Alpha_ib_b
-                + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b @ Alpha_ib_b
-            )
-        else:
-            C_new_old = torch.eye(3, device=dev) + Alpha_ib_b
+
+        # todo: I dropped the if here due to lack of support in torch.vmap.
+        # This should be okay, as with low values of mag_alpha sin(m) / m = 1 and (1 - cos(m)) / m^2 = 0
+        # if mag_alpha > 1.0e-8:
+        #     C_new_old = (
+        #         torch.eye(3, device=dev)
+        #         + torch.sin(mag_alpha) / mag_alpha * Alpha_ib_b
+        #         + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b @ Alpha_ib_b
+        #     )
+        # else:
+        #     C_new_old = torch.eye(3, device=dev) + Alpha_ib_b
+        C_new_old = (
+            torch.eye(3, device=dev)
+            + torch.sin(mag_alpha) / mag_alpha * Alpha_ib_b
+            + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b @ Alpha_ib_b
+        )
+
         # Update attitude using (5.75)
         old_C_b_e_new = C_Earth @ old_C_b_e_prev @ C_new_old
         # SPECIFIC FORCE FRAME TRANSFORMATION
         # Calculate the average body-to-ECEF-frame coordinate transformation
         # matrix over the update interval using (5.84) and (5.85)
-        if mag_alpha > 1.0e-8:
-            ave_C_b_e = (
-                old_C_b_e_prev
-                @ (
-                    torch.eye(3, device=dev)
-                    + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b
-                    + (1 - torch.sin(mag_alpha) / mag_alpha)
-                    / mag_alpha ** 2
-                    * Alpha_ib_b
-                    @ Alpha_ib_b
-                )
-                - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ old_C_b_e_prev
+        # todo: I dropped the if here due to lack of support in torch.vmap. This will be an issue
+        # if mag_alpha > 1.0e-8:
+        #     ave_C_b_e = (
+        #         old_C_b_e_prev
+        #         @ (
+        #             torch.eye(3, device=dev)
+        #             + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b
+        #             + (1 - torch.sin(mag_alpha) / mag_alpha)
+        #             / mag_alpha ** 2
+        #             * Alpha_ib_b
+        #             @ Alpha_ib_b
+        #         )
+        #         - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ old_C_b_e_prev
+        #     )
+        # else:
+        #     ave_C_b_e = (
+        #         old_C_b_e_prev
+        #         - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ old_C_b_e_prev
+        #     )
+
+        ave_C_b_e = (
+            old_C_b_e_prev
+            @ (
+                torch.eye(3, device=dev)
+                + (1 - torch.cos(mag_alpha)) / mag_alpha ** 2 * Alpha_ib_b
+                + (1 - torch.sin(mag_alpha) / mag_alpha)
+                / mag_alpha ** 2
+                * Alpha_ib_b
+                @ Alpha_ib_b
             )
-        else:
-            ave_C_b_e = (
-                old_C_b_e_prev
-                - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ old_C_b_e_prev
-            )
-                # Transform specific force to ECEF-frame resolving axes using (5.85)
+            - 0.5 * skew_symmetric(zero_pad(alpha_ie)).to(dev) @ old_C_b_e_prev
+        )
+        # Transform specific force to ECEF-frame resolving axes using (5.85)
         f_ib_e = ave_C_b_e @ f_ib_b
-    
-    
-    
+
+
+
         # CALCULATE ATTITUDE
         # _,_,est_att_new = ecef2geo_ned(est_pos_new, est_vel_new, est_C_b_e_new)
         est_att_new = torch.squeeze(CTM_to_euler(old_C_b_e_new.T))
@@ -351,7 +346,7 @@ def dead_reckoning_ecef(
         old_C_b_e_prev = old_C_b_e_new
 
         # UPDATE VELOCITY
-        est_vel_new = dr_result[i][3:6] + dt * ( f_ib_e + gravity_ECEF(dr_result[i][0:3]) - 2 * skew_symmetric([0, 0, constant_omega_ie]).to(dev) @ dr_result[i][3:6])
+        est_vel_new = dr_result[i][3:6] + dt * ( f_ib_e + gravity_ECEF(dr_result[i][0:3]) - 2 * skew_symmetric(zero_pad(constant_omega_ie)).to(dev) @ dr_result[i][3:6])
 
         '''should use another way to calculate position? if so there is a gradient question'''
         # UPDATE CARTESIAN POSITION
@@ -362,18 +357,21 @@ def dead_reckoning_ecef(
         dr_result.append(torch.cat([est_pos_new,est_vel_new,est_att_new,old_C_b_e_new.reshape(9)]))
 
 
-        
-        
+
+
     return  torch.stack(dr_result), old_C_b_e_new
 
 
+dead_reckoning_ecef_batched = torch.vmap(dead_reckoning_ecef, in_dims=(None, 0, 0, 0, 0), out_dims=0)
+
+
 def dead_reckoning_ecef_test(Fs, dr_temp, est_C_b_e, imu_meas, imu_error):
-        
+
     dt = 1/Fs
 
 
     f_ib_b = imu_meas[0:3] - imu_error[0:3]
-    omega_ib_b = imu_meas[3:6] - imu_error[3:6] 
+    omega_ib_b = imu_meas[3:6] - imu_error[3:6]
     # ATTITUDE UPDATE
     # From (2.145) determine the Earth rotation over the update interval
     # C_Earth = C_e_i' * old_C_e_i
@@ -393,7 +391,7 @@ def dead_reckoning_ecef_test(Fs, dr_temp, est_C_b_e, imu_meas, imu_error):
     mag_alpha = torch.norm(alpha_ib_b)
 
     Alpha_ib_b = torch.zeros(3,3)
-    
+
     Alpha_ib_b[0,1] = -alpha_ib_b[2]
     Alpha_ib_b[0,2] = alpha_ib_b[1]
     Alpha_ib_b[1,0] = alpha_ib_b[2]
@@ -427,42 +425,42 @@ def dead_reckoning_ecef_test(Fs, dr_temp, est_C_b_e, imu_meas, imu_error):
                 * Alpha_ib_b
                 @ Alpha_ib_b
             )
-            - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ est_C_b_e
+            - 0.5 * skew_symmetric(zero_pad(alpha_ie)).to(dev) @ est_C_b_e
         )
     else:
         ave_C_b_e = (
             est_C_b_e
-            - 0.5 * skew_symmetric([0, 0, alpha_ie]).to(dev) @ est_C_b_e
+            - 0.5 * skew_symmetric(zero_pad(alpha_ie)).to(dev) @ est_C_b_e
         )
     # Transform specific force to ECEF-frame resolving axes using (5.85)
     f_ib_e = ave_C_b_e @ f_ib_b
-    
-    
-    
+
+
+
 
     # CALCULATE ATTITUDE
     # _,_,est_att_new = ecef2geo_ned(est_pos_new, est_vel_new, est_C_b_e_new)
     est_att_new = torch.squeeze(CTM_to_euler(C_b_e_new.T))
     # print(est_att_new)
-    
+
 
     # UPDATE VELOCITY
-    est_vel_new = dr_temp[3:6] + dt * ( f_ib_e + gravity_ECEF(dr_temp[0:3]) - 2 * skew_symmetric([0, 0, constant_omega_ie]).to(dev) @ dr_temp[3:6])
+    est_vel_new = dr_temp[3:6] + dt * ( f_ib_e + gravity_ECEF(dr_temp[0:3]) - 2 * skew_symmetric(zero_pad(constant_omega_ie)).to(dev) @ dr_temp[3:6])
     '''gradient question'''
     # UPDATE CARTESIAN POSITION
     est_pos_new = dr_temp[0:3] + (dr_temp[3:6] + est_vel_new) / 2 * dt
 
     ''''Should use detach to gravity?'''
     dr_result = torch.cat([est_pos_new,est_vel_new,est_att_new,C_b_e_new.reshape(9)])
-        
+
     return dr_result, C_b_e_new
-        
+
 def Model_LC(meas, dr_temp, est_C_b_e_old, imu, imu_error, P_old, Q, R, Fs_meas):
-    
+
     meas_f_ib_b = imu[:3].reshape(3, 1)
     est_pos_old = dr_temp[0:3]
-    
-    
+
+
     est_L_b_old = ecef2geo_ned(est_pos_old)
     dt = 1/Fs_meas
     """ Set State transition matrix F """
@@ -485,7 +483,7 @@ def Model_LC(meas, dr_temp, est_C_b_e_old, imu, imu_error, P_old, Q, R, Fs_meas)
         / torch.norm(est_pos_old)
     )
     F22 = torch.eye(3) - 2 * OMEGA_ie_e * dt
-    F23 = -dt * skew_symmetric(est_C_b_e_old @ meas_f_ib_b)
+    F23 = -dt * skew_symmetric((est_C_b_e_old @ meas_f_ib_b).squeeze())
     F24 = est_C_b_e_old * dt
     F33 = torch.eye(3) - OMEGA_ie_e * dt
     F35 = est_C_b_e_old * dt
@@ -497,7 +495,7 @@ def Model_LC(meas, dr_temp, est_C_b_e_old, imu, imu_error, P_old, Q, R, Fs_meas)
     F[3:6, 9:12] = F24
     F[6:9, 6:9] = F33
     F[6:9, 12:15] = F35
-    
+
     """ Prediction state vector and state covariance matrix"""
     x_predict = torch.zeros(15)  # State Vector is zero
     P_predict = F @ P_old @ F.T + Q
@@ -547,7 +545,7 @@ def Model_LC(meas, dr_temp, est_C_b_e_old, imu, imu_error, P_old, Q, R, Fs_meas)
     # est_C_b_e_new = est_C_b_e_old
     est_C_b_e_new = est_C_b_e_est
     imu_error_new = imu_error + imu_error_est
-    
+
     dr_new[6:9] = dr_new_att_est
     dr_new[9:18] = est_C_b_e_new.reshape(9)
 
@@ -584,20 +582,19 @@ def gravity_ECEF(p_eb_e):
     # Calculate distance from center of the Earth
     mag_r = torch.norm(p_eb_e)
     # If the input position is 0,0,0, produce a dummy output
-    if mag_r == 0:
-        g = torch.tensor([[0], [0], [0]], device=dev)
+    # todo: vmap does not support if. This might be okay
+    # if mag_r == 0:
+    #     g = torch.tensor([[0], [0], [0]], device=dev)
     # Calculate gravitational acceleration using (2.142)
-    else:
-        z_scale = float(5 * (p_eb_e[2] / mag_r) ** 2)
-        z_scale_mat = torch.zeros(3)
-        z_scale_mat[0] = (1 - z_scale) * p_eb_e[0]
-        z_scale_mat[1] = (1 - z_scale) * p_eb_e[1]
-        z_scale_mat[2] = (3 - z_scale) * p_eb_e[2]
-        gamma = (-mu / mag_r ** 3 * ( p_eb_e + ( 1.5 * J_2 * (R_0 / mag_r) ** 2 * z_scale_mat)))
-        # Add centripetal acceleration using (2.133)
-        g = torch.zeros(3)
-        g[0:2] = gamma[0:2] + omega_ie ** 2 * p_eb_e[0:2]
-        g[2] = gamma[2]
+    # else:
+    z_scale = 5 * (p_eb_e[2] / mag_r) ** 2
+    z_scale_mat = (torch.tensor([1, 1, 3]) - z_scale) * p_eb_e
+    z_scale_mat[0] = (1 - z_scale) * p_eb_e[0]
+    z_scale_mat[1] = (1 - z_scale) * p_eb_e[1]
+    z_scale_mat[2] = (3 - z_scale) * p_eb_e[2]
+    gamma = (-mu / mag_r ** 3 * (p_eb_e + (1.5 * J_2 * (R_0 / mag_r) ** 2 * z_scale_mat)))
+    # Add centripetal acceleration using (2.133)
+    g = torch.cat((gamma[0:2] + omega_ie ** 2 * p_eb_e[0:2], gamma[2].view(1)), dim=0)
     return g
 
 
@@ -625,7 +622,6 @@ def lc_propagate_f(est_pos_old, est_C_b_e_old, imu, Fs_meas):
             + (1 - constant_e**2) ** 2 * torch.sin(est_L_b_old[0]) ** 2
         )
     )
-    F = torch.eye(9)
     F12 = torch.eye(3) * dt
     F21 = (
         -dt
@@ -636,13 +632,19 @@ def lc_propagate_f(est_pos_old, est_C_b_e_old, imu, Fs_meas):
         / torch.norm(est_pos_old)
     )
     F22 = torch.eye(3) - 2 * OMEGA_ie_e * dt
-    F23 = -dt * skew_symmetric(est_C_b_e_old @ meas_f_ib_b)
-    F[0:3, 3:6] = F12
-    F[3:6, 0:3] = F21
-    F[3:6, 3:6] = F22
-    F[3:6, 6:9] = F23
+    F23 = -dt * skew_symmetric((est_C_b_e_old @ meas_f_ib_b).squeeze())
+    row1 = torch.cat((F12, torch.zeros((3, 6))), dim=1)
+    row2 = torch.cat((F21, F22, F23), dim=1)
+    row3 = torch.cat((torch.zeros((3, 6)), torch.eye(3)), dim=1)
+    F = torch.cat((row1, row2, row3), dim=0)
+    # F = torch.eye(9)
+    # F[0:3, 3:6] = F12
+    # F[3:6, 0:3] = F21
+    # F[3:6, 3:6] = F22
+    # F[3:6, 6:9] = F23
     return F
 
+lc_propagate_f_batched = torch.vmap(lc_propagate_f, in_dims=(0, 0, 0, None), out_dims=0)
 
 def ecef2geo_ned(*arg):
     # (r_eb_e,v_eb_e)
@@ -668,11 +670,11 @@ def ecef2geo_ned(*arg):
     # Convert position using Borkowski closed-form exact solution
     r_eb_e = arg[0]
     # From (2.113)
-    Long = math.atan2(r_eb_e[1], r_eb_e[0])
+    Long = torch.atan2(r_eb_e[1], r_eb_e[0])
     # From (C.29) and (C.30)
     k1 = math.sqrt(1 - constant_e**2) * abs(r_eb_e[2])
     k2 = constant_e**2 * constant_a
-    beta = math.sqrt(r_eb_e[0] ** 2 + r_eb_e[1] ** 2)
+    beta = torch.sqrt(r_eb_e[0] ** 2 + r_eb_e[1] ** 2)
     E = (k1 - k2) / beta
     F = (k1 + k2) / beta
     # From (C.31)
@@ -682,54 +684,34 @@ def ecef2geo_ned(*arg):
     # From (C.33)
     D = P**3 + Q**2
     # From (C.34)
-    V = (math.sqrt(D) - Q) ** (1 / 3) - (math.sqrt(D) + Q) ** (1 / 3)
+    V = (torch.sqrt(D) - Q) ** (1 / 3) - (torch.sqrt(D) + Q) ** (1 / 3)
     # From (C.35)
-    G = 0.5 * (math.sqrt(E**2 + V) + E)
+    G = 0.5 * (torch.sqrt(E**2 + V) + E)
     # From (C.36)
-    T = math.sqrt(G**2 + (F - V * G) / (2 * G - E)) - G
+    T = torch.sqrt(G**2 + (F - V * G) / (2 * G - E)) - G
     # From (C.37)
-    Lat = torch.sign(r_eb_e[2]) * math.atan2(
+    Lat = torch.sign(r_eb_e[2]) * torch.atan2(
         (1 - T**2), (2 * T * math.sqrt(1 - constant_e**2))
     )
     # From (C.38)
     h = (beta - constant_a * T) * cos(Lat) + (
         r_eb_e[2] - torch.sign(r_eb_e[2]) * constant_a * math.sqrt(1 - constant_e**2)
     ) * sin(Lat)
-    p_b_llh = torch.tensor([[float(Lat)], [float(Long)], [float(h)]])
+    p_b_llh = torch.stack((Lat, Long, h)).reshape(3, 1)
     if len(arg) == 1:
         return p_b_llh
+    v_eb_e = arg[1]
+    cos_lat = torch.cos(Lat)
+    sin_lat = torch.sin(Lat)
+    cos_lon = torch.cos(Long)
+    sin_lon = torch.sin(Long)
+    R_e_n = get_R_e_n(cos_lat, sin_lat, cos_lon, sin_lon)
+    # Transform velocity using (2.73)
+    v_eb_n = R_e_n @ v_eb_e
     if len(arg) == 2:
-        v_eb_e = arg[1]
-        cos_lat = math.cos(Lat)
-        sin_lat = math.sin(Lat)
-        cos_lon = math.cos(Long)
-        sin_lon = math.sin(Long)
-        R_e_n = torch.tensor(
-            [
-                [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
-                [-sin_lon, cos_lon, 0],
-                [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat],
-            ]
-        )
-        # Transform velocity using (2.73)
-        v_eb_n = R_e_n @ v_eb_e
         return p_b_llh, v_eb_n
     if len(arg) == 3:
-        v_eb_e = arg[1]
         R_b_e = arg[2]
-        cos_lat = math.cos(Lat)
-        sin_lat = math.sin(Lat)
-        cos_lon = math.cos(Long)
-        sin_lon = math.sin(Long)
-        R_e_n = torch.tensor(
-            [
-                [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
-                [-sin_lon, cos_lon, 0],
-                [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat],
-            ]
-        )
-        # Transform velocity using (2.73)
-        v_eb_n = R_e_n @ v_eb_e
         R_b_n = R_e_n @ R_b_e
         euler_b_n = CTM_to_euler(R_b_n.T).reshape(3)
         return p_b_llh, v_eb_n, euler_b_n

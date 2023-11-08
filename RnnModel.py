@@ -67,9 +67,9 @@ class LC_est_KG(nn.Module):
         )
 
 
-        
+
         # """  FC Layer1  """
-        
+
         # self.layer1 = nn.Linear(self.input_dim, self.linearfc1_dim, bias=True)
         # self.layer1_relu = nn.ReLU()
 
@@ -107,40 +107,42 @@ class LC_est_KG(nn.Module):
 
         # self.biaslayer.register_full_backward_hook(print_backward)
 
-    def init_hidden_state(self):
+    def init_hidden_state(self, batch_size):
         if self.recurrent_kind == "lstm":
-            state1 = torch.zeros(self.n_layers, 1, self.hidden_dim)
-            state2 = torch.zeros(self.n_layers, 1, self.hidden_dim)
+            state1 = torch.zeros(self.n_layers, batch_size, self.hidden_dim)
+            state2 = torch.zeros(self.n_layers, batch_size, self.hidden_dim)
             nn.init.xavier_normal_(state1)
             nn.init.xavier_normal_(state2)
 
             self.state = (state1, state2)
         else:
-            self.state = torch.zeros(self.n_layers, 1, self.hidden_dim)
+            self.state = torch.zeros(self.n_layers, batch_size, self.hidden_dim)
             nn.init.xavier_normal_(self.state)
 
     def init_sequence(self, Fs_meas, init_pva, init_meas, init_imu):
-        self.x_old_old = torch.zeros(9) # x_t-1|t-1
-        self.x_old_old_previous = torch.zeros(9) # x_t-2|t-2
-        self.x_pred_old_previous = torch.zeros(9) # x_t-1|t-2
+        assert init_pva.shape[0] == init_meas.shape[0] == init_imu.shape[0]
+        batch_size = init_meas.shape[0]
+        self.x_old_old = torch.zeros(batch_size, 9) # x_t-1|t-1
+        self.x_old_old_previous = torch.zeros(batch_size, 9) # x_t-2|t-2
+        self.x_pred_old_previous = torch.zeros(batch_size, 9) # x_t-1|t-2
         # self.meas_old = init_meas # y_t-1
         self.meas_old = init_meas # y_t-1
         self.imu_old = init_imu
-        
+
         self.Fs_meas = Fs_meas
-        self.prev_out_old = init_pva[:9]
+        self.prev_out_old = init_pva[:,:9]
 
 
     def get_KG(self, features_KG, imu, dr):
-        
+
         '''try diff'''
-        dr_pos_diff = dr[1:,:3] - dr[:-1,:3]
-        dr_vel_diff = dr[1:,3:6] - dr[:-1,3:6]
+        dr_pos_diff = dr[:,1:,:3] - dr[:,:-1,:3]
+        dr_vel_diff = dr[:,1:,3:6] - dr[:,:-1,3:6]
         '''Here can add Cbe diff'''
         # dr_att_diff = dr[1:,6:9] - dr[:-1,6:9]
-        
-        imu_acc_diff = imu[1:,:3] - imu[:-1,:3]
-        imu_gyro_diff = imu[1:,3:] - imu[:-1,3:]
+
+        imu_acc_diff = imu[:,1:,:3] - imu[:,:-1,:3]
+        imu_gyro_diff = imu[:,1:,3:] - imu[:,:-1,3:]
 
         # dr_pos_diff = functions.norm_normal_dis_2d(dr_pos_diff)
         # dr_vel_diff = functions.norm_normal_dis_2d(dr_vel_diff)
@@ -149,26 +151,25 @@ class LC_est_KG(nn.Module):
         # imu_gyro_diff = functions.norm_normal_dis_2d(imu_gyro_diff)
 
 
-        dr_pos_diff = func.normalize(dr_pos_diff, p=2, dim=0, eps=1e-12, out=None)
-        dr_vel_diff = func.normalize(dr_vel_diff, p=2, dim=0, eps=1e-12, out=None)
+        dr_pos_diff = func.normalize(dr_pos_diff, p=2, dim=1, eps=1e-12, out=None)
+        dr_vel_diff = func.normalize(dr_vel_diff, p=2, dim=1, eps=1e-12, out=None)
         # dr_att_diff = functions.norm_normal_dis_2d(dr_att_diff)
-        imu_acc_diff = func.normalize(imu_acc_diff, p=2, dim=0, eps=1e-12, out=None)
-        imu_gyro_diff = func.normalize(imu_gyro_diff, p=2, dim=0, eps=1e-12, out=None)
+        imu_acc_diff = func.normalize(imu_acc_diff, p=2, dim=1, eps=1e-12, out=None)
+        imu_gyro_diff = func.normalize(imu_gyro_diff, p=2, dim=1, eps=1e-12, out=None)
 
-        dr_imu = torch.cat([dr_pos_diff,dr_vel_diff,imu_acc_diff,imu_gyro_diff],dim=1)
+        dr_imu = torch.cat([dr_pos_diff,dr_vel_diff,imu_acc_diff,imu_gyro_diff],dim=2)
         # dr_diff = dr
         # print(dr_diff.shape)
         cnn_out = self.cnn(dr_imu)
 
-        Rnn_in = torch.cat((features_KG.reshape(-1), cnn_out.reshape(-1))).reshape(1, 1, -1)
+        Rnn_in = torch.cat((features_KG, cnn_out), dim=1).unsqueeze(1)
         rnn_out, self.state = self.rnn(Rnn_in, self.state)
-        rnn_out_reshape = rnn_out.reshape(1,self.hidden_dim)
 
         # L2_in = torch.cat((rnn_out_reshape, torch.unsqueeze(cnn_out, 0)), dim=1)
         # L2_in = torch.cat((rnn_out_reshape, cnn_out), dim=1)
 
         # L2_out = self.layer2(self.tanh(L2_in))
-        L2_out = self.layer2(self.leakyrelu(rnn_out_reshape))
+        L2_out = self.layer2(self.leakyrelu(rnn_out))
 
         L3_out = self.layer3(self.leakyrelu(L2_out))
         # L3_out = self.layer3(L2_out)
@@ -180,26 +181,26 @@ class LC_est_KG(nn.Module):
         # out[:3*6] = out[:3*6]
         # out[3*6:6*6] = out[3*6:6*6]*0.1
         # out[6*6:9*6] = out[6*6:9*6]*0.001
-        
+
         KG = out#[0,:54]
         #accbias = out[0,54:57]
         #gyrobias = out[0,57:]
         '''to be modified, eg two layer, one for acc and one for angv'''
         # bias = self.biaslayer(self.tanh(L3_out))[0]
-        accbias = self.biaslayer1(self.leakyrelu(L3_out))[0]
-        gyrobias = self.biaslayer2(self.leakyrelu(L3_out))[0]
+        accbias = self.biaslayer1(self.leakyrelu(L3_out)).squeeze(1)
+        gyrobias = self.biaslayer2(self.leakyrelu(L3_out)).squeeze(1)
         # accbias = self.biaslayer1(L3_out)[0]
         # gyrobias = self.biaslayer2(L3_out)[0]
 
         if self.idx_ifimu:
 
-            if sum(abs(accbias)) > 0.5:
-                accbias = accbias * self.acc_scale 
-            if sum(abs(gyrobias)) > 0.01:
-                gyrobias = gyrobias * self.gyro_scale 
+            if accbias.abs().sum() > 0.5:
+                accbias = accbias * self.acc_scale
+            if gyrobias.abs().sum() > 0.01:
+                gyrobias = gyrobias * self.gyro_scale
         else:
-            accbias = accbias * self.acc_scale 
-            gyrobias = gyrobias * self.gyro_scale 
+            accbias = accbias * self.acc_scale
+            gyrobias = gyrobias * self.gyro_scale
 
         # if sum(abs(accbias)) > 1:
         #     accbias = accbias*0.1
@@ -209,23 +210,29 @@ class LC_est_KG(nn.Module):
         # accbias = self.tanh(accbias)
         # gyrobias = self.tanh(gyrobias)
 
-        
-        
-        bias = torch.cat([accbias,gyrobias])
+
+
+        bias = torch.cat([accbias,gyrobias], dim=1)
         # print(f"Bias: {bias}")
 
         return KG, bias
+
+
+    def forward_unbatched(self, meas, dr_temp, est_C_b_e_old, imu, prev_out, dr):
+        dr_new, est_C_b_e_new, imu_error = self.forward(meas.unsqueeze(0), dr_temp.unsqueeze(0), est_C_b_e_old.unsqueeze(0), imu.unsqueeze(0), prev_out.unsqueeze(0), dr.unsqueeze(0))
+        return dr_new.squeeze(0), est_C_b_e_new.squeeze(0), imu_error.squeeze(0)
 
 
     def forward(self, meas, dr_temp, est_C_b_e_old, imu, prev_out, dr):
 
         """Get Features"""
 
-        F = functions.lc_propagate_f(dr_temp[0:3], est_C_b_e_old, imu[-1], self.Fs_meas)
-        self.x_pred_old = F @ self.x_old_old
+        # testing this
+        F = functions.lc_propagate_f_batched(dr_temp[:,0:3], est_C_b_e_old, imu[:,-1], self.Fs_meas)
+        self.x_pred_old = torch.bmm(F, self.x_old_old.unsqueeze(2)).squeeze()
         # x_t-1|t-2                         x_t|t-1
         # self.x_error_old_previous_predict = self.x_error_old_predict
-        
+
         f_1 = self.x_old_old - self.x_old_old_previous
 
         f_2 = self.x_old_old - self.x_pred_old_previous
@@ -238,16 +245,16 @@ class LC_est_KG(nn.Module):
         # f_4 = imu[-1] - self.imu_old
         # f_4 = self.x_old_old
 
-        f_4 = dr_temp[0:6] - meas
+        f_4 = dr_temp[:,0:6] - meas
 
-        f_5 = prev_out[0:6] - self.prev_out_old[0:6]
-        
+        f_5 = prev_out[:,0:6] - self.prev_out_old[:,0:6]
+
         # f_5 = self.x_pred_old
-        f_1 = func.normalize(f_1, p=2, dim=0, eps=1e-12, out=None)
-        f_2 = func.normalize(f_2, p=2, dim=0, eps=1e-12, out=None)
-        f_3 = func.normalize(f_3, p=2, dim=0, eps=1e-12, out=None)
-        f_4 = func.normalize(f_4, p=2, dim=0, eps=1e-12, out=None)
-        # f_5 = func.normalize(f_5, p=2, dim=0, eps=1e-12, out=None)
+        f_1 = func.normalize(f_1, p=2, dim=1, eps=1e-12, out=None)
+        f_2 = func.normalize(f_2, p=2, dim=1, eps=1e-12, out=None)
+        f_3 = func.normalize(f_3, p=2, dim=1, eps=1e-12, out=None)
+        f_4 = func.normalize(f_4, p=2, dim=1, eps=1e-12, out=None)
+        # f_5 = func.normalize(f_5, p=2, dim=1, eps=1e-12, out=None)
 
         # f_1 = functions.norm_normal_dis(f_1)
         # f_2 = functions.norm_normal_dis(f_2)
@@ -258,7 +265,7 @@ class LC_est_KG(nn.Module):
 
         # features_KG = torch.cat([f_1.detach(),f_2.detach(),f_3.detach(),f_5.detach()], dim=0)
 
-        features_KG = torch.cat([f_1,f_2,f_3,f_4], dim=0)
+        features_KG = torch.cat([f_1,f_2,f_3,f_4], dim=1)
         # features_KG = torch.cat([f_1.detach(),f_2.detach(),f_3.detach(),f_4.detach()], dim=0)
 
         # KGainNet_in = KGainNet_in.detach()
@@ -267,13 +274,13 @@ class LC_est_KG(nn.Module):
         KG, imu_error = self.get_KG(features_KG, imu, dr)
 
         # Reshape Kalman Gain to a Matrix
-        KGain = torch.reshape(KG, (9, 6))
+        KGain = torch.reshape(KG, (F.shape[0], 9, 6))
         """Update"""
-        delta_z = dr_temp[0:6] - meas
+        delta_z = dr_temp[:,0:6] - meas
         # if abs(sum(delta_z)) > 100:
         #     delta_z = func.normalize(delta_z, p=2, dim=0, eps=1e-12, out=None)
-        Inno = KGain @ delta_z
-    
+        Inno = torch.bmm(KGain, delta_z.unsqueeze(2)).squeeze(2)
+
 
 
         # '''another way'''
@@ -282,24 +289,24 @@ class LC_est_KG(nn.Module):
         # est_C_b_e_new = functions.euler_to_CTM(self.dr_new[6:]).T
         # else:
         #     # # '''one way'''
-        dr_new_pv = dr_temp[:6] - Inno[:6]
-        
+        dr_new_pv = dr_temp[:,:6] - Inno[:,:6]
+
 
         if self.idx_feedback_type == 'pvb':
             est_C_b_e_new = est_C_b_e_old
-            self.dr_new = torch.cat([dr_new_pv, dr_temp[6:9], est_C_b_e_old.reshape(9)])
+            self.dr_new = torch.cat([dr_new_pv, dr_temp[:,6:9], est_C_b_e_old.reshape(est_C_b_e_old.shape[0],9)])
 
 
         if self.idx_feedback_type == 'pvab':
 
 
             if self.idx_ifatt:
-                if sum(abs(Inno[6:])) > 0.001:
-                    Inno_att_scale = Inno[6:9]* self.att_scale
+                if Inno[:,6:].abs().sum() > 0.001:
+                    Inno_att_scale = Inno[:,6:9]* self.att_scale
                 else:
-                    Inno_att_scale = Inno[6:9]
+                    Inno_att_scale = Inno[:,6:9]
             else:
-                Inno_att_scale = Inno[6:9]* self.att_scale
+                Inno_att_scale = Inno[:,6:9]* self.att_scale
             # skew_att = torch.tensor(
             #     [
             #         [0, -Inno_att_scale[2], Inno_att_scale[1]],
@@ -307,14 +314,14 @@ class LC_est_KG(nn.Module):
             #         [-Inno_att_scale[1], Inno_att_scale[0], 0],
             #     ]
             # )
-            skew_att = torch.zeros(3,3)
-            
-            skew_att[0,1] = -Inno_att_scale[2]
-            skew_att[0,2] = Inno_att_scale[1]
-            skew_att[1,0] = Inno_att_scale[2]
-            skew_att[1,2] = -Inno_att_scale[0]
-            skew_att[2,0] = -Inno_att_scale[1]
-            skew_att[2,1] = Inno_att_scale[0]
+            skew_att = torch.zeros(Inno_att_scale.shape[0],3,3)
+
+            skew_att[:,0,1] = -Inno_att_scale[:,2]
+            skew_att[:,0,2] = Inno_att_scale[:,1]
+            skew_att[:,1,0] = Inno_att_scale[:,2]
+            skew_att[:,1,2] = -Inno_att_scale[:,0]
+            skew_att[:,2,0] = -Inno_att_scale[:,1]
+            skew_att[:,2,1] = Inno_att_scale[:,0]
 
             # skew_att_list = []
             # skew_att_list.append
@@ -323,29 +330,29 @@ class LC_est_KG(nn.Module):
             est_C_b_e_new = (torch.eye(3) - skew_att) @ est_C_b_e_old
 
 
-            dr_new_att = torch.squeeze(functions.CTM_to_euler(est_C_b_e_new.T))
-            self.dr_new = torch.cat([dr_new_pv, dr_new_att, est_C_b_e_new.reshape(9)])
+            dr_new_att = functions.CTM_to_euler_batched(est_C_b_e_new.transpose(1, 2))
+            self.dr_new = torch.cat([dr_new_pv, dr_new_att, est_C_b_e_new.reshape(est_C_b_e_new.shape[0],9)], dim=1)
 
 
-        
+
         self.x_old_old_previous = self.x_old_old
         self.x_old_old = Inno
         self.x_pred_old_previous = self.x_pred_old
         self.meas_old = meas
         self.imu_old = imu[-1]
         self.prev_out_old = prev_out
-        
-        
-        
-        
+
+
+
+
         return self.dr_new, est_C_b_e_new, imu_error
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
 
 
 
@@ -518,7 +525,7 @@ class LC_est_KG(nn.Module):
 #                        input_dim_2, linearfc1_dim_2, hidden_dim_2, n_layers_2, linearfc2_dim_2, output_dim_2,
 #                        input_dim_3, linearfc1_dim_3, hidden_dim_3, n_layers_3, linearfc2_dim_3, output_dim_3):
 #         super(LC_est_P_Q_R, self).__init__()
-        
+
 #         '''  GRU_1 Estimate Q  '''
 #         self.input_dim_1 = input_dim_1
 #         self.linearfc1_dim_1 = linearfc1_dim_1
@@ -526,7 +533,7 @@ class LC_est_KG(nn.Module):
 #         self.n_layers_1 = n_layers_1
 #         self.linearfc2_dim_1 = linearfc2_dim_1
 #         self.output_dim_1 = output_dim_1
-        
+
 #         self.layer1_1 = nn.Linear(self.input_dim_1, self.linearfc1_dim_1, bias=True)
 #         self.layer1_1_relu = nn.ReLU()
 #         # self.hidden_state_1 = torch.zeros(self.n_layers_1, 1, self.hidden_dim_1)
@@ -543,7 +550,7 @@ class LC_est_KG(nn.Module):
 #         self.n_layers_2 = n_layers_2
 #         self.linearfc2_dim_2 = linearfc2_dim_2
 #         self.output_dim_2 = output_dim_2
-        
+
 #         self.layer1_2 = nn.Linear(self.input_dim_2, self.linearfc1_dim_2, bias=True)
 #         self.layer1_2_relu = nn.ReLU()
 #         # self.hidden_state_2 = torch.zeros(self.n_layers_2, 1, self.hidden_dim_2)
@@ -552,7 +559,7 @@ class LC_est_KG(nn.Module):
 #         self.layer2_2 = nn.Linear(self.hidden_dim_2, self.linearfc2_dim_2, bias=True)
 #         self.layer2_2_relu = nn.ReLU()
 #         self.layer3_2 = nn.Linear(self.linearfc2_dim_2, self.output_dim_2, bias=True)
-        
+
 #         '''  GRU_3 Estimate R  '''
 #         self.input_dim_3 = input_dim_3
 #         self.linearfc1_dim_3 = linearfc1_dim_3
@@ -560,7 +567,7 @@ class LC_est_KG(nn.Module):
 #         self.n_layers_3 = n_layers_3
 #         self.linearfc2_dim_3 = linearfc2_dim_3
 #         self.output_dim_3 = output_dim_3
-        
+
 #         self.layer1_3 = nn.Linear(self.input_dim_3, self.linearfc1_dim_3, bias=True)
 #         self.layer1_3_relu = nn.ReLU()
 #         # self.hidden_state_3 = torch.zeros(self.n_layers_3, 1, self.hidden_dim_3)
@@ -571,7 +578,7 @@ class LC_est_KG(nn.Module):
 #         self.layer3_3 = nn.Linear(self.linearfc2_dim_3, self.output_dim_3, bias=True)
 
 #     def init_hidden_state(self):
-        
+
 #         self.state_1 = torch.zeros(self.n_layers_1, 1, self.hidden_dim_1)
 #         # self.cell_1 = torch.randn(self.n_layers, 1, self.hidden_dim_1)
 
@@ -584,12 +591,12 @@ class LC_est_KG(nn.Module):
 
 
 #     def init_sequence(self):
-        
+
 #         # pos 3, vel 3, att 3 (biases are not estimated now)
 #         num_state = 9
 #         # GNSS measurement for LC is pos 3, vel 3
 #         num_measurement = 6
-        
+
 #         # x_error_old: x_t-1|t-1
 #         self.x_error_old = torch.zeros(num_state)
 #         # x_error_predict: x_t|t-1
@@ -600,19 +607,19 @@ class LC_est_KG(nn.Module):
 #         # since it is error state kalman filter, y_t-1 is 
 #         # (delta_z = gnss_pv_t-1 - dr_pv_t-1)
 #         self.y_old = torch.zeros(num_measurement)
-        
+
 #         '''if we want to use QPR as features，init here'''
 #         # Set initial state propagation error matrix Q
 
 #         # Set initial Covariance matrix P
-        
+
 #         # Set initial Covariance matrix R
-        
+
 #         # Set measurement matrix H
 #         self.H = torch.zeros(6*9).reshape(6,9)
 #         self.H[0:3,0:3] = -torch.eye(3)
 #         self.H[3:6,3:6] = -torch.eye(3)
-        
+
 
 #     def get_Q(self, Q_Net_in):
 
@@ -661,10 +668,10 @@ class LC_est_KG(nn.Module):
 #         L2_relu_out = self.layer2_2_relu(L2_out)
 
 #         L3_out = self.layer3_2(L2_relu_out)
-        
+
 #         return L3_out
-    
-    
+
+
 #     def get_R(self, R_Net_in):
 
 #         # GRU 3 get R
@@ -682,19 +689,19 @@ class LC_est_KG(nn.Module):
 #         # LSTM_in[0, 0, :] = L3_relu_out
 #         # LSTM_out, (self.state_3, self.cell_3) = self.rnn_LSTM_3(LSTM_in, (self.state_3, self.cell_3))
 #         # LSTM_out_reshape = torch.reshape(LSTM_out, (1, self.hidden_dim_3))
-        
+
 #         L2_out = self.layer2_3(GRU_out_reshape)
 #         L2_relu_out = self.layer2_3_relu(L2_out)
 
 #         L3_out = self.layer3_3(L2_relu_out)
-        
+
 #         return L3_out
-    
-    
-    
+
+
+
 #     def forward(self, dr_pos, dr_vel, dr_C_b_e, gnss_pv, imu):
-        
-        
+
+
 #         '''Get Features'''
 
 #         F = rnm.lc_propagate_f(dr_pos, dr_C_b_e, imu)
@@ -705,7 +712,7 @@ class LC_est_KG(nn.Module):
 #         # Q_NN = self.get_Q(x_f1.detach())
 #         Q_NN = self.get_Q(x_f1)
 #         Q_NN = torch.reshape(Q_NN, (9, 9))
-        
+
 #         # Feature 2: x_t-1|t-1 - x_t-2|t-2
 #         # since we can not get current posterior x_t|t we can only use posterior
 #         # at t-1 and t-2, while it still efficient
